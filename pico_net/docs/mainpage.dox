@@ -1,0 +1,99 @@
+/**
+ * @mainpage pico_net
+ *
+ * ## Overview
+ *
+ * pico_net is a lightweight networking library for the Raspberry Pi Pico W.
+ * It provides Go-like abstractions for TCP and UDP using lwIP.
+ *
+ * ## Features
+ *
+ * - TCP connections (`Connection`, `Listener`)
+ * - UDP connections with logical sessions
+ * - DHCP server
+ * - DNS server (with captive portal support)
+ * - Access Point mode
+ * - Non-blocking + event loop design
+ *
+ * ## Example
+ *
+ * The dial function connects to servers
+ *
+ * ```cpp
+ * Network network;
+ * network.initialize();
+ * network.setup_wifi_access_point("PicoEcho", "12345678");
+ *
+ * Address addr{"tcp", "192.168.4.18", 12345};
+ * auto [conn, connErr] = network.dial_tcp(addr);
+ * if (connErr) {
+ *     // handle error
+ * }
+ *
+ * const char* msg = "Hello, server!";
+ * auto [bytes_written, writeErr] = conn->write(
+ *     reinterpret_cast<const std::byte*>(msg),
+ *     strlen(msg)
+ * );
+ * if (writeErr) {
+ *     // handle error
+ * }
+ * ```
+ *
+ * The listen function creates servers
+ *
+ * ```cpp
+ * Network network;
+ * network.initialize();
+ * network.setup_wifi_access_point("PicoEcho", "12345678");
+ *
+ * auto [listener, err] = network.listen_tcp(12345);
+ *
+ * std::vector<std::unique_ptr<Connection>> clients;
+ *
+ * while (true) {
+ *     auto [conn, acceptErr] = listener->accept_nonblocking();
+ *     if (acceptErr) {
+ *         // handle error
+ *     }
+ *
+ *     if (conn) {
+ *         clients.push_back(std::move(conn));
+ *     }
+ *
+ *     for (auto it = clients.begin(); it != clients.end(); ) {
+ *         auto& conn = *it;
+ *
+ *         std::byte buffer[256];
+ *         auto [bytes_read, readErr] = conn->read_nonblocking(buffer, sizeof(buffer) - 1);
+ *         if (readErr) {
+ *             // handle error (e.g. close connection if it's a fatal error)
+ *         }
+ *
+ *         if (bytes_read > 0) {
+ *             buffer[bytes_read] = std::byte{0}; // Null-terminate for printing
+ *             printf("Received: %s\n", reinterpret_cast<char*>(buffer));
+ *         }
+ *
+ *         ++it;
+ *     }
+ * }
+ * ```
+ *
+ * ## Architecture
+ *
+ * - Event loop based (no threads)
+ * - lwIP callbacks wrapped into C++ classes
+ * - Embedded-first design
+ * - Error handling with pico_core's std::optional<Error>
+ *
+ * ## Polling
+ *
+ * pico_net handles polling internally. Non-blocking operations poll once per
+ * call, while blocking operations poll repeatedly until data is available,
+ * an operation completes, or a timeout occurs.
+ *
+ * Applications usually do not need to call `cyw43_arch_poll()` manually when
+ * using pico_net APIs.
+ *
+ */
