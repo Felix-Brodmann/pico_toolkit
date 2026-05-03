@@ -207,8 +207,3 @@ int main() {
 - `include/` Public headers
 - `src/` C++ implementation
 - `examples/` Example applications
-- `docs/` Documentation and design notes
-
-## License
-
-MIT License (see LICENSE file)
