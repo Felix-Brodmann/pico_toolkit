@@ -1,0 +1,12 @@
+/**
+ * @mainpage Pico Toolkit
+ *
+ * ## Overview
+ *
+ * Pico Toolkit is a collection of lightweight libraries for the Raspberry Pi Pico.
+ *
+ * ## Modules
+ *
+ * - @ref pico_core
+ * - @ref pico_net
+ */
