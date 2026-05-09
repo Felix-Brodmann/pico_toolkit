@@ -27,13 +27,21 @@
 enum class MqttClientState
 {
     DISCONNECTED,
+    CONNECTING,
     CONNECTED,
-    ERROR
+    DISCONNECTING
 };
 
 class MqttClient
 {
 private:
+    struct MqttFrameInfo
+    {
+        bool                 complete   = false;
+        size_t               total_size = 0;
+        std::optional<Error> error;
+    };
+
     Network                    &network;
     std::unique_ptr<Connection> conn;
 
@@ -41,22 +49,26 @@ private:
 
     uint16_t next_packet_identifier = 1;
     uint16_t keep_alive_seconds     = 60;
+    bool     waiting_for_pingresp   = false;
 
     absolute_time_t last_tx = nil_time;
     absolute_time_t last_rx = nil_time;
 
-    bool waiting_for_pingresp = false;
-
     std::vector<std::byte>         rx_buffer;
     std::deque<MqttPublishMessage> incoming_messages;
 
+    MqttFrameInfo mqtt_frame_info(std::span<const std::byte> data);
     uint16_t allocate_packet_identifier();
+    void     cleanup_connection();
+    std::optional<Error> process_rx_buffer();
 
     std::optional<Error> send_encoded(const MqttEncodedPacket &packet);
     std::optional<Error> handle_packet(const MqttControlPacket &packet);
 
 public:
-    explicit MqttClient(Network &network) : network(network) {}
+    explicit MqttClient(Network &network) : network(network)
+    {
+    }
 
     [[nodiscard]]
     std::optional<Error> connect(const Address &broker, const MqttConnectMessage &connect_message, uint32_t timeout_ms = 10000);
@@ -75,6 +87,14 @@ public:
 
     bool has_message() const;
 
+    [[nodiscard]]
+    std::tuple<MqttPublishMessage, std::optional<Error>> next_message();
+
+    [[nodiscard]]
+    std::optional<Error> disconnect();
+
+    bool is_connected() const;
+};
     [[nodiscard]]
     std::tuple<MqttPublishMessage, std::optional<Error>> next_message();
 
