@@ -8,21 +8,21 @@
 
 #pragma once
 
-#include <cstring>
-#include <string>
-#include <utility>
-#include <tuple>
-#include <optional>
-#include <cstddef>
-#include <vector>
-#include "pico/stdlib.h"
-#include "pico/cyw43_arch.h"
-#include "lwip/tcp.h"
 #include "lwip/ip_addr.h"
+#include "lwip/tcp.h"
+#include "pico/cyw43_arch.h"
+#include "pico/stdlib.h"
+#include <cstddef>
+#include <cstring>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <vector>
 
-#include "error.hpp"
-#include "connection.hpp"
 #include "address.hpp"
+#include "connection.hpp"
+#include "error.hpp"
 
 class Network;
 class TcpListener;
@@ -30,7 +30,9 @@ class TcpListener;
 /**
  * @class TcpConnection
  * @brief Represents a TCP connection.
- * @details This class encapsulates a TCP connection, providing methods for reading, writing, and managing the connection. It uses the lwIP TCP/IP stack for handling TCP connections.
+ * @details This class encapsulates a TCP connection, providing methods for reading, writing, and managing the connection. It uses the lwIP TCP/IP
+ * stack for handling TCP connections.
+ * @ingroup pico_net
  * @par Example
  * @code{.cpp}
  * #include <cstdio>
@@ -77,7 +79,7 @@ class TcpListener;
  *     if (n == 0) {
  *         printf("Connection closed by peer\n");
  *     }
- * 
+ *
  *     buffer[n] = std::byte{0};
  *     printf("Received: %s\n", reinterpret_cast<char*>(buffer));
  *
@@ -87,43 +89,47 @@ class TcpListener;
  * }
  * @endcode
  */
-class TcpConnection : public Connection {
+class TcpConnection : public Connection
+{
 private:
-    tcp_pcb* pcb;
-    Address local_addr;
-    Address remote_addr;
+    tcp_pcb *pcb;
+    Address  local_addr;
+    Address  remote_addr;
 
     std::vector<std::byte> rx_buffer;
-    bool is_closed = false;
-    bool has_error = false;
-    std::string last_error_message;
+    bool                   is_closed = false;
+    bool                   has_error = false;
+    std::string            last_error_message;
 
     std::optional<uint32_t> read_deadline_ms;
     std::optional<uint32_t> write_deadline_ms;
 
-    TcpConnection(tcp_pcb* pcb, Address local_addr, Address remote_addr) : pcb(pcb), local_addr(std::move(local_addr)), remote_addr(std::move(remote_addr)) {}
+    TcpConnection(tcp_pcb *pcb, Address local_addr, Address remote_addr)
+        : pcb(pcb), local_addr(std::move(local_addr)), remote_addr(std::move(remote_addr))
+    {
+    }
 
     friend class Network;
     friend class TcpListener;
 
     void attach_callbacks();
 
-    static err_t tcp_recv_callback(void* arg, tcp_pcb* pcb, pbuf* p, err_t err);
-    static void tcp_err_callback(void* arg, err_t err);
+    static err_t tcp_recv_callback(void *arg, tcp_pcb *pcb, pbuf *p, err_t err);
+    static void  tcp_err_callback(void *arg, err_t err);
 
-    err_t handle_tcp_recv(tcp_pcb* pcb, pbuf* p, err_t err);
-    void handle_tcp_err(err_t err);
+    err_t handle_tcp_recv(tcp_pcb *pcb, pbuf *p, err_t err);
+    void  handle_tcp_err(err_t err);
 
 public:
     ~TcpConnection();
 
-    [[nodiscard]] std::tuple<int, std::optional<Error>> read(std::byte* buffer, size_t size) override;
-    [[nodiscard]] std::tuple<int, std::optional<Error>> write(const std::byte* buffer, size_t size) override;
-    [[nodiscard]] std::optional<Error> close() override;
-    Address local_address() const override;
-    Address remote_address() const override;
-    [[nodiscard]] std::optional<Error> set_deadline(uint32_t timeout_ms) override;
-    [[nodiscard]] std::optional<Error> set_read_deadline(uint32_t timeout_ms) override;
-    [[nodiscard]] std::optional<Error> set_write_deadline(uint32_t timeout_ms) override;
-    [[nodiscard]] std::tuple<int, std::optional<Error>> read_nonblocking(std::byte* buffer, size_t size) override;
+    [[nodiscard]] std::tuple<int, std::optional<Error>>    read(std::byte *buffer, size_t size) override;
+    [[nodiscard]] std::tuple<size_t, std::optional<Error>> write(const std::byte *buffer, size_t size) override;
+    [[nodiscard]] std::optional<Error>                     close() override;
+    Address                                                local_address() const override;
+    Address                                                remote_address() const override;
+    [[nodiscard]] std::optional<Error>                     set_deadline(uint32_t timeout_ms) override;
+    [[nodiscard]] std::optional<Error>                     set_read_deadline(uint32_t timeout_ms) override;
+    [[nodiscard]] std::optional<Error>                     set_write_deadline(uint32_t timeout_ms) override;
+    [[nodiscard]] std::tuple<int, std::optional<Error>>    read_nonblocking(std::byte *buffer, size_t size) override;
 };

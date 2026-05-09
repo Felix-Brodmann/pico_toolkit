@@ -8,20 +8,23 @@
 
 #pragma once
 
-#include <tuple>
-#include <optional>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <tuple>
 
-#include "error.hpp"
 #include "address.hpp"
+#include "error.hpp"
 
 /**
  * @class Connection
  * @brief Represents a network connection between a local and remote endpoint.
- * @details This is an abstract base class that defines the interface for network connections. It provides methods for reading and writing data, closing the connection, retrieving local and remote addresses, and setting deadlines for read and write operations.
+ * @details This is an abstract base class that defines the interface for network connections. It provides methods for reading and writing data,
+ * closing the connection, retrieving local and remote addresses, and setting deadlines for read and write operations.
+ * @ingroup pico_net
  */
-class Connection {
+class Connection
+{
 public:
     virtual ~Connection() = default;
 
@@ -31,7 +34,7 @@ public:
      * @param size The size of the buffer.
      * @return A tuple containing the number of bytes read and an optional error.
      */
-    virtual std::tuple<int, std::optional<Error>> read(std::byte* buffer, size_t size) = 0;
+    virtual std::tuple<int, std::optional<Error>> read(std::byte *buffer, size_t size) = 0;
 
     /**
      * @brief Writes data to the connection.
@@ -39,7 +42,7 @@ public:
      * @param size The size of the data to write.
      * @return A tuple containing the number of bytes written and an optional error.
      */
-    virtual std::tuple<int, std::optional<Error>> write(const std::byte* buffer, size_t size) = 0;
+    virtual std::tuple<size_t, std::optional<Error>> write(const std::byte *buffer, size_t size) = 0;
 
     /**
      * @brief Closes the connection.
@@ -86,5 +89,5 @@ public:
      * @param size The size of the buffer.
      * @return A tuple containing the number of bytes read and an optional error.
      */
-    virtual std::tuple<int, std::optional<Error>> read_nonblocking(std::byte* buffer, size_t size) = 0;
+    virtual std::tuple<int, std::optional<Error>> read_nonblocking(std::byte *buffer, size_t size) = 0;
 };
