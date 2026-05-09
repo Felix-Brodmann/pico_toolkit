@@ -1,4 +1,58 @@
+/**
+ * @file mqtt_client.cpp
+ * @brief Implements the MqttClient class for managing MQTT connections and messaging.
+ * @author Felix Brodmann
+ * @date 2026-05-03
+ * @version 1.0.0
+ */
+
 #include "mqtt_client.hpp"
+
+MqttClient::MqttFrameInfo MqttClient::mqtt_frame_info(std::span<const std::byte> data)
+{
+    if (data.size() < 2)
+    {
+        return {};
+    }
+
+    size_t   offset           = 1;
+    uint32_t multiplier       = 1;
+    uint32_t remaining_length = 0;
+
+    while (true)
+    {
+        if (offset >= data.size())
+        {
+            return {};
+        }
+
+        uint8_t encoded_byte = static_cast<uint8_t>(data[offset++]);
+
+        remaining_length += (encoded_byte & 127) * multiplier;
+
+        if ((encoded_byte & 128) == 0)
+        {
+            break;
+        }
+
+        multiplier *= 128;
+
+        if (multiplier > 128 * 128 * 128)
+        {
+            return {false, 0, Error("Malformed MQTT remaining length")};
+        }
+    }
+
+    size_t header_size = offset;
+    size_t total_size  = header_size + remaining_length;
+
+    if (data.size() < total_size)
+    {
+        return {};
+    }
+
+    return {true, total_size, std::nullopt};
+}
 
 uint16_t MqttClient::allocate_packet_identifier()
 {
@@ -12,29 +66,149 @@ uint16_t MqttClient::allocate_packet_identifier()
     return id;
 }
 
+void MqttClient::cleanup_connection()
+{
+    if (conn)
+    {
+        conn->close();
+        conn.reset();
+    }
+
+    waiting_for_pingresp = false;
+    rx_buffer.clear();
+    incoming_messages.clear();
+
+    state = MqttClientState::DISCONNECTED;
+}
+
+std::optional<Error> MqttClient::process_rx_buffer()
+{
+    while (true)
+    {
+        auto info = mqtt_frame_info(rx_buffer);
+
+        if (info.error)
+        {
+            cleanup_connection();
+            return info.error;
+        }
+
+        if (!info.complete)
+        {
+            return std::nullopt;
+        }
+
+        auto packet_span = std::span<const std::byte>(rx_buffer.data(), info.total_size);
+
+        auto [packet, packet_err] = MqttParser::parse_control_packet(packet_span);
+
+        if (packet_err)
+        {
+            cleanup_connection();
+            return packet_err;
+        }
+
+        auto handle_err = handle_packet(packet);
+        if (handle_err)
+        {
+            cleanup_connection();
+            return handle_err;
+        }
+
+        rx_buffer.erase(rx_buffer.begin(), rx_buffer.begin() + static_cast<std::ptrdiff_t>(info.total_size));
+    }
+}
+
 std::optional<Error> MqttClient::send_encoded(const MqttEncodedPacket &packet)
 {
     if (!conn)
     {
+        cleanup_connection();
         return Error("MQTT client is not connected");
     }
 
-    auto [written, err] = conn->write(packet.bytes.data(), packet.bytes.size());
-    if (err)
-    {
-        state = MqttClientState::ERROR;
-        return err;
-    }
+    size_t total_written = 0;
 
-    if (written != static_cast<int>(packet.bytes.size()))
+    while (total_written < packet.bytes.size())
     {
-        state = MqttClientState::ERROR;
-        return Error("MQTT packet was only partially written");
+        auto [written, err] = conn->write(packet.bytes.data() + total_written, packet.bytes.size() - total_written);
+
+        if (err)
+        {
+            cleanup_connection();
+            return err;
+        }
+
+        if (written == 0)
+        {
+            cleanup_connection();
+            return Error("MQTT packet could not be fully written");
+        }
+
+        total_written += written;
     }
 
     last_tx = get_absolute_time();
-
     return std::nullopt;
+}
+
+std::optional<Error> MqttClient::handle_packet(const MqttControlPacket &packet)
+{
+    switch (packet.fixed_header.type)
+    {
+    case MqttMessageType::PUBLISH:
+    {
+        auto [msg, err] = MqttParser::parse_publish(packet);
+        if (err)
+        {
+            return err;
+        }
+
+        if (msg.qos > 0)
+        {
+            return Error("MQTT client currently supports incoming QoS 0 only");
+        }
+
+        incoming_messages.push_back(std::move(msg));
+        return std::nullopt;
+    }
+
+    case MqttMessageType::PINGRESP:
+    {
+        auto [msg, err] = MqttParser::parse_pingresp(packet);
+        if (err)
+        {
+            return err;
+        }
+
+        waiting_for_pingresp = false;
+        return std::nullopt;
+    }
+
+    case MqttMessageType::SUBACK:
+    {
+        auto [msg, err] = MqttParser::parse_suback(packet);
+        if (err)
+        {
+            return err;
+        }
+
+        if (msg.return_codes.empty())
+        {
+            return Error("MQTT SUBACK must contain at least one return code");
+        }
+
+        if (msg.return_codes[0] == MqttSubackReturnCode::FAILURE)
+        {
+            return Error("MQTT broker rejected subscription");
+        }
+
+        return std::nullopt;
+    }
+
+    default:
+        return std::nullopt;
+    }
 }
 
 std::optional<Error> MqttClient::connect(const Address &broker, const MqttConnectMessage &connect_message, uint32_t timeout_ms)
@@ -44,20 +218,22 @@ std::optional<Error> MqttClient::connect(const Address &broker, const MqttConnec
         return Error("MQTT client already connected");
     }
 
+    state = MqttClientState::CONNECTING;
+
     auto [tcp_conn, dial_err] = network.dial_tcp(broker, timeout_ms);
     if (dial_err)
     {
-        state = MqttClientState::ERROR;
         return dial_err;
     }
 
     conn               = std::move(tcp_conn);
     keep_alive_seconds = connect_message.keep_alive;
+    rx_buffer.clear();
 
     auto [connect_packet, encode_err] = MqttEncoder::encode_connect(connect_message);
     if (encode_err)
     {
-        state = MqttClientState::ERROR;
+        cleanup_connection();
         return encode_err;
     }
 
@@ -76,7 +252,7 @@ std::optional<Error> MqttClient::connect(const Address &broker, const MqttConnec
         auto [n, read_err] = conn->read_nonblocking(buffer, sizeof(buffer));
         if (read_err)
         {
-            state = MqttClientState::ERROR;
+            cleanup_connection();
             return read_err;
         }
 
@@ -84,34 +260,62 @@ std::optional<Error> MqttClient::connect(const Address &broker, const MqttConnec
         {
             last_rx = get_absolute_time();
 
-            auto packet_span          = std::span<const std::byte>(buffer, static_cast<size_t>(n));
-            auto [packet, packet_err] = MqttParser::parse_control_packet(packet_span);
-            if (packet_err)
+            rx_buffer.insert(rx_buffer.end(), buffer, buffer + static_cast<size_t>(n));
+
+            auto info = mqtt_frame_info(rx_buffer);
+
+            if (info.error)
             {
-                state = MqttClientState::ERROR;
-                return packet_err;
+                cleanup_connection();
+                return info.error;
             }
 
-            auto [connack, connack_err] = MqttParser::parse_connack(packet);
-            if (connack_err)
+            if (info.complete)
             {
-                state = MqttClientState::ERROR;
-                return connack_err;
-            }
+                auto packet_span = std::span<const std::byte>(rx_buffer.data(), info.total_size);
 
-            if (connack.return_code != MqttConnackReturnCode::ACCEPTED)
-            {
-                state = MqttClientState::ERROR;
-                return Error("MQTT broker rejected connection");
-            }
+                auto [packet, packet_err] = MqttParser::parse_control_packet(packet_span);
 
-            state = MqttClientState::CONNECTED;
-            return std::nullopt;
+                if (packet_err)
+                {
+                    cleanup_connection();
+                    return packet_err;
+                }
+
+                if (packet.fixed_header.type != MqttMessageType::CONNACK)
+                {
+                    cleanup_connection();
+                    return Error("MQTT expected CONNACK during connect");
+                }
+
+                auto [connack, connack_err] = MqttParser::parse_connack(packet);
+
+                if (connack_err)
+                {
+                    cleanup_connection();
+                    return connack_err;
+                }
+
+                rx_buffer.erase(rx_buffer.begin(), rx_buffer.begin() + static_cast<std::ptrdiff_t>(info.total_size));
+
+                if (connack.return_code != MqttConnackReturnCode::ACCEPTED)
+                {
+                    cleanup_connection();
+                    return Error("MQTT broker rejected connection");
+                }
+
+                auto now = get_absolute_time();
+                last_rx  = now;
+                last_tx  = now;
+
+                state = MqttClientState::CONNECTED;
+                return std::nullopt;
+            }
         }
 
         if (absolute_time_diff_us(get_absolute_time(), until) <= 0)
         {
-            state = MqttClientState::ERROR;
+            cleanup_connection();
             return Error("MQTT CONNACK timeout");
         }
 
@@ -128,9 +332,10 @@ std::optional<Error> MqttClient::publish(const std::string &topic, std::span<con
 
     MqttPublishMessage msg;
     msg.topic_name = topic;
-    msg.payload    = payload;
     msg.qos        = 0;
     msg.retain     = retain;
+
+    msg.payload.assign(payload.begin(), payload.end());
 
     auto [packet, encode_err] = MqttEncoder::encode_publish(msg);
     if (encode_err)
@@ -178,55 +383,6 @@ std::optional<Error> MqttClient::subscribe(const std::string &topic, uint8_t qos
     return send_encoded(packet);
 }
 
-std::optional<Error> MqttClient::handle_packet(const MqttControlPacket &packet)
-{
-    switch (packet.fixed_header.type)
-    {
-    case MqttMessageType::PUBLISH:
-    {
-        auto [msg, err] = MqttParser::parse_publish(packet);
-        if (err)
-        {
-            return err;
-        }
-
-        if (msg.qos > 0)
-        {
-            return Error("MQTT client currently supports incoming QoS 0 only");
-        }
-
-        incoming_messages.push_back(std::move(msg));
-        return std::nullopt;
-    }
-
-    case MqttMessageType::PINGRESP:
-    {
-        auto [msg, err] = MqttParser::parse_pingresp(packet);
-        if (err)
-        {
-            return err;
-        }
-
-        waiting_for_pingresp = false;
-        return std::nullopt;
-    }
-
-    case MqttMessageType::SUBACK:
-    {
-        auto [msg, err] = MqttParser::parse_suback(packet);
-        if (err)
-        {
-            return err;
-        }
-
-        return std::nullopt;
-    }
-
-    default:
-        return std::nullopt;
-    }
-}
-
 std::optional<Error> MqttClient::poll()
 {
     if (state != MqttClientState::CONNECTED)
@@ -239,7 +395,7 @@ std::optional<Error> MqttClient::poll()
     auto [n, read_err] = conn->read_nonblocking(buffer, sizeof(buffer));
     if (read_err)
     {
-        state = MqttClientState::ERROR;
+        cleanup_connection();
         return read_err;
     }
 
@@ -247,29 +403,27 @@ std::optional<Error> MqttClient::poll()
     {
         last_rx = get_absolute_time();
 
-        auto packet_span          = std::span<const std::byte>(buffer, static_cast<size_t>(n));
-        auto [packet, packet_err] = MqttParser::parse_control_packet(packet_span);
-        if (packet_err)
-        {
-            state = MqttClientState::ERROR;
-            return packet_err;
-        }
+        rx_buffer.insert(rx_buffer.end(), buffer, buffer + static_cast<size_t>(n));
 
-        auto handle_err = handle_packet(packet);
-        if (handle_err)
+        auto err = process_rx_buffer();
+        if (err)
         {
-            state = MqttClientState::ERROR;
-            return handle_err;
+            return err;
         }
     }
 
     if (keep_alive_seconds > 0)
     {
-        int64_t since_last_tx_us = absolute_time_diff_us(last_tx, get_absolute_time());
+        auto now = get_absolute_time();
 
         int64_t keep_alive_us = static_cast<int64_t>(keep_alive_seconds) * 1000 * 1000;
 
-        if (!waiting_for_pingresp && since_last_tx_us >= keep_alive_us)
+        int64_t ping_interval_us = keep_alive_us / 2;
+        int64_t timeout_us       = keep_alive_us + keep_alive_us / 2;
+
+        int64_t since_last_tx_us = absolute_time_diff_us(last_tx, now);
+
+        if (!waiting_for_pingresp && since_last_tx_us >= ping_interval_us)
         {
             auto [packet, err] = MqttEncoder::encode_pingreq();
             if (err)
@@ -288,11 +442,13 @@ std::optional<Error> MqttClient::poll()
 
         if (waiting_for_pingresp)
         {
-            int64_t since_last_rx_us = absolute_time_diff_us(last_rx, get_absolute_time());
+            now = get_absolute_time();
 
-            if (since_last_rx_us >= keep_alive_us + keep_alive_us / 2)
+            int64_t since_last_rx_us = absolute_time_diff_us(last_rx, now);
+
+            if (since_last_rx_us >= timeout_us)
             {
-                state = MqttClientState::ERROR;
+                cleanup_connection();
                 return Error("MQTT PINGRESP timeout");
             }
         }
@@ -334,13 +490,7 @@ std::optional<Error> MqttClient::disconnect()
 
     auto send_err = send_encoded(packet);
 
-    if (conn)
-    {
-        conn->close();
-        conn.reset();
-    }
-
-    state = MqttClientState::DISCONNECTED;
+    cleanup_connection();
 
     return send_err;
 }
