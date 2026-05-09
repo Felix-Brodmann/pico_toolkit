@@ -8,48 +8,58 @@
 
 #include "udp_listener.hpp"
 
-void UdpListener::attach_callbacks() {
+void UdpListener::attach_callbacks()
+{
     cyw43_arch_lwip_begin();
     udp_recv(pcb, &UdpListener::udp_recv_callback, this);
     cyw43_arch_lwip_end();
 }
 
-UdpListener::~UdpListener() {
+UdpListener::~UdpListener()
+{
     (void)close();
 }
 
-void UdpListener::udp_recv_callback(void* arg,udp_pcb* pcb,pbuf* p,const ip_addr_t* addr,u16_t port) {
-    if (arg == nullptr) {
-        if (p != nullptr) {
+void UdpListener::udp_recv_callback(void *arg, udp_pcb *pcb, pbuf *p, const ip_addr_t *addr, u16_t port)
+{
+    if (arg == nullptr)
+    {
+        if (p != nullptr)
+        {
             pbuf_free(p);
         }
         return;
     }
 
-    static_cast<UdpListener*>(arg)->handle_udp_recv(pcb, p, addr, port);
+    static_cast<UdpListener *>(arg)->handle_udp_recv(pcb, p, addr, port);
 }
 
-void UdpListener::handle_udp_recv(udp_pcb* pcb,pbuf* p,const ip_addr_t* addr,u16_t port) {
+void UdpListener::handle_udp_recv(udp_pcb *pcb, pbuf *p, const ip_addr_t *addr, u16_t port)
+{
     (void)pcb;
 
-    if (is_closed) {
-        if (p != nullptr) {
+    if (is_closed)
+    {
+        if (p != nullptr)
+        {
             pbuf_free(p);
         }
         return;
     }
 
-    if (p == nullptr) {
+    if (p == nullptr)
+    {
         return;
     }
 
-    if (addr == nullptr || IP_GET_TYPE(addr) != IPADDR_TYPE_V4) {
+    if (addr == nullptr || IP_GET_TYPE(addr) != IPADDR_TYPE_V4)
+    {
         pbuf_free(p);
         return;
     }
 
     std::string remote_ip = ipaddr_ntoa(ip_2_ip4(addr));
-    Address remote_addr{"udp", remote_ip, port};
+    Address     remote_addr{"udp", remote_ip, port};
 
     UdpConnection::Datagram datagram;
     datagram.from = remote_addr;
@@ -61,20 +71,13 @@ void UdpListener::handle_udp_recv(udp_pcb* pcb,pbuf* p,const ip_addr_t* addr,u16
     std::string key = make_peer_key(remote_addr);
 
     auto existing = active_connections.find(key);
-    if (existing != active_connections.end() && existing->second != nullptr) {
+    if (existing != active_connections.end() && existing->second != nullptr)
+    {
         existing->second->enqueue_datagram(std::move(datagram));
         return;
     }
 
-    auto conn = std::unique_ptr<UdpConnection>(
-        new UdpConnection(
-            this->pcb,
-            local_addr,
-            remote_addr,
-            false,
-            this
-        )
-    );
+    auto conn = std::unique_ptr<UdpConnection>(new UdpConnection(this->pcb, local_addr, remote_addr, false, this));
 
     conn->enqueue_datagram(std::move(datagram));
 
@@ -82,20 +85,25 @@ void UdpListener::handle_udp_recv(udp_pcb* pcb,pbuf* p,const ip_addr_t* addr,u16
     pending_connections.push_back(std::move(conn));
 }
 
-void UdpListener::remove_connection(const Address& remote_addr) {
+void UdpListener::remove_connection(const Address &remote_addr)
+{
     std::string key = make_peer_key(remote_addr);
     active_connections.erase(key);
 }
 
-std::tuple<std::unique_ptr<Connection>, std::optional<Error>> UdpListener::accept() {
-    while (true) {
+std::tuple<std::unique_ptr<Connection>, std::optional<Error>> UdpListener::accept()
+{
+    while (true)
+    {
         auto [conn, err] = accept_nonblocking();
 
-        if (err) {
+        if (err)
+        {
             return {nullptr, std::move(err)};
         }
 
-        if (conn != nullptr) {
+        if (conn != nullptr)
+        {
             return {std::move(conn), std::nullopt};
         }
 
@@ -103,8 +111,10 @@ std::tuple<std::unique_ptr<Connection>, std::optional<Error>> UdpListener::accep
     }
 }
 
-std::optional<Error> UdpListener::close() {
-    if (pcb == nullptr) {
+std::optional<Error> UdpListener::close()
+{
+    if (pcb == nullptr)
+    {
         is_closed = true;
         return std::nullopt;
     }
@@ -113,8 +123,10 @@ std::optional<Error> UdpListener::close() {
 
     udp_recv(pcb, nullptr, nullptr);
 
-    for (auto& conn : pending_connections) {
-        if (conn != nullptr) {
+    for (auto &conn : pending_connections)
+    {
+        if (conn != nullptr)
+        {
             conn->close();
         }
     }
@@ -126,22 +138,26 @@ std::optional<Error> UdpListener::close() {
 
     cyw43_arch_lwip_end();
 
-    pcb = nullptr;
+    pcb       = nullptr;
     is_closed = true;
 
     return std::nullopt;
 }
 
-Address UdpListener::address() const {
+Address UdpListener::address() const
+{
     return local_addr;
 }
 
-std::tuple<std::unique_ptr<Connection>, std::optional<Error>> UdpListener::accept_nonblocking() {
-    if (is_closed) {
+std::tuple<std::unique_ptr<Connection>, std::optional<Error>> UdpListener::accept_nonblocking()
+{
+    if (is_closed)
+    {
         return {nullptr, Error("listener is closed")};
     }
 
-    if (has_error) {
+    if (has_error)
+    {
         return {nullptr, Error(last_error_message)};
     }
 
@@ -149,7 +165,8 @@ std::tuple<std::unique_ptr<Connection>, std::optional<Error>> UdpListener::accep
     cyw43_arch_poll();
 #endif
 
-    if (pending_connections.empty()) {
+    if (pending_connections.empty())
+    {
         return {nullptr, std::nullopt};
     }
 
@@ -159,11 +176,13 @@ std::tuple<std::unique_ptr<Connection>, std::optional<Error>> UdpListener::accep
     return {std::move(conn), std::nullopt};
 }
 
-void UdpListener::handle_udp_error(const std::string& msg) {
-    has_error = true;
+void UdpListener::handle_udp_error(const std::string &msg)
+{
+    has_error          = true;
     last_error_message = msg;
 }
 
-std::string UdpListener::make_peer_key(const Address& address) {
+std::string UdpListener::make_peer_key(const Address &address)
+{
     return address.ip + ":" + std::to_string(address.port);
 }

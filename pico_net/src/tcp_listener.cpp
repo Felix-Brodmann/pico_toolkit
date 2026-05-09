@@ -11,7 +11,8 @@
 TcpListener::~TcpListener()
 {
     auto err = close();
-    if (err) {
+    if (err)
+    {
         tcp_abort(pcb);
     }
 }
@@ -24,63 +25,71 @@ void TcpListener::attach_callbacks()
     cyw43_arch_lwip_end();
 }
 
-err_t TcpListener::tcp_accept_callback(void* arg, tcp_pcb* newpcb, err_t err)
+err_t TcpListener::tcp_accept_callback(void *arg, tcp_pcb *newpcb, err_t err)
 {
-    if (arg == nullptr) {
-        if (newpcb != nullptr) {
+    if (arg == nullptr)
+    {
+        if (newpcb != nullptr)
+        {
             tcp_abort(newpcb);
         }
         return ERR_ABRT;
     }
 
-    return static_cast<TcpListener*>(arg)->handle_tcp_accept(newpcb, err);
+    return static_cast<TcpListener *>(arg)->handle_tcp_accept(newpcb, err);
 }
 
-err_t TcpListener::handle_tcp_accept(tcp_pcb* newpcb, err_t err)
+err_t TcpListener::handle_tcp_accept(tcp_pcb *newpcb, err_t err)
 {
     cyw43_arch_lwip_check();
 
-    if (is_closed) {
-        if (newpcb != nullptr) {
+    if (is_closed)
+    {
+        if (newpcb != nullptr)
+        {
             tcp_abort(newpcb);
         }
         return ERR_ABRT;
     }
 
-    if (err != ERR_OK || newpcb == nullptr) {
-        has_error = true;
+    if (err != ERR_OK || newpcb == nullptr)
+    {
+        has_error          = true;
         last_error_message = "tcp accept failed";
         return (err != ERR_OK) ? err : ERR_ABRT;
     }
 
-    std::string remote_ip = "";
-    uint16_t remote_port = newpcb->remote_port;
-    uint16_t local_port = newpcb->local_port;
+    std::string remote_ip   = "";
+    uint16_t    remote_port = newpcb->remote_port;
+    uint16_t    local_port  = newpcb->local_port;
 
-    if (IP_GET_TYPE(&newpcb->remote_ip) == IPADDR_TYPE_V4) {
+    if (IP_GET_TYPE(&newpcb->remote_ip) == IPADDR_TYPE_V4)
+    {
         remote_ip = ipaddr_ntoa(ip_2_ip4(&newpcb->remote_ip));
     }
 
     Address accepted_local_addr{"tcp", local_addr.ip, local_port};
     Address remote_addr{"tcp", remote_ip, remote_port};
 
-    auto conn = std::unique_ptr<TcpConnection>(
-        new TcpConnection(newpcb, std::move(accepted_local_addr), std::move(remote_addr))
-    );
+    auto conn = std::unique_ptr<TcpConnection>(new TcpConnection(newpcb, std::move(accepted_local_addr), std::move(remote_addr)));
 
     pending_connections.push_back(std::move(conn));
 
     return ERR_OK;
 }
 
-std::tuple<std::unique_ptr<Connection>, std::optional<Error>> TcpListener::accept() {
-    while (true) {
+std::tuple<std::unique_ptr<Connection>, std::optional<Error>> TcpListener::accept()
+{
+    while (true)
+    {
         auto [conn, err] = accept_nonblocking();
-        if (err) {
+        if (err)
+        {
             return {nullptr, std::move(err)};
         }
 
-        if (conn != nullptr) {
+        if (conn != nullptr)
+        {
             return {std::move(conn), std::nullopt};
         }
 
@@ -90,15 +99,18 @@ std::tuple<std::unique_ptr<Connection>, std::optional<Error>> TcpListener::accep
 
 std::optional<Error> TcpListener::close()
 {
-    if (pcb == nullptr) {
+    if (pcb == nullptr)
+    {
         is_closed = true;
         return std::nullopt;
     }
 
     cyw43_arch_lwip_begin();
 
-    for (auto& conn : pending_connections) {
-        if (conn != nullptr) {
+    for (auto &conn : pending_connections)
+    {
+        if (conn != nullptr)
+        {
             conn->close();
         }
     }
@@ -108,15 +120,17 @@ std::optional<Error> TcpListener::close()
     tcp_accept(pcb, nullptr);
 
     err_t err = tcp_close(pcb);
-    if (err != ERR_OK) {
+    if (err != ERR_OK)
+    {
         tcp_abort(pcb);
     }
     cyw43_arch_lwip_end();
 
-    pcb = nullptr;
+    pcb       = nullptr;
     is_closed = true;
 
-    if (err != ERR_OK) {
+    if (err != ERR_OK)
+    {
         return Error("tcp_close failed");
     }
 
@@ -139,9 +153,9 @@ std::tuple<std::unique_ptr<Connection>, std::optional<Error>> TcpListener::accep
         return {nullptr, Error(last_error_message)};
     }
 
-    #if PICO_CYW43_ARCH_POLL
-        cyw43_arch_poll();
-    #endif
+#if PICO_CYW43_ARCH_POLL
+    cyw43_arch_poll();
+#endif
 
     if (pending_connections.empty())
     {
